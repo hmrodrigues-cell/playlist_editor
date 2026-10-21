@@ -66,7 +66,7 @@
   button.quiet:hover { color: var(--danger); border-color: var(--danger); }
   button.export { background: var(--signal); border-color: var(--signal); color: var(--signal-ink); font-weight: 600; }
   button.export:hover { filter: brightness(1.08); }
-  select { appearance: none; padding-right: 30px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%; background-size: 5px 5px; background-repeat: no-repeat; }
+  select { appearance: none; padding-right: 30px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 14px) calc(50% - 2px), calc(100% - 9px) calc(50% - 2px); background-size: 5px 5px; background-repeat: no-repeat; }
   select option { background: var(--surface); }
 
   /* Drop area: a full panel when empty, a slim strip once there are tracks */
@@ -287,10 +287,25 @@ const u32 = b => ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
 
 function decodeText(bytes) {
   if (!bytes.length) return '';
-  const labels = { 0: 'iso-8859-1', 1: 'utf-16', 2: 'utf-16be', 3: 'utf-8' };
-  const label = labels[bytes[0]] || 'iso-8859-1';
+  const enc = bytes[0];
+  let body = bytes.subarray(1);
+  let label = 'iso-8859-1';
+  if (enc === 1 || enc === 2) {
+    // UTF-16 uses a 2-byte BOM when present; otherwise assume little-endian.
+    if (body.length >= 2 && body[0] === 0xFF && body[1] === 0xFE) {
+      body = body.subarray(2);
+      label = 'utf-16le';
+    } else if (body.length >= 2 && body[0] === 0xFE && body[1] === 0xFF) {
+      body = body.subarray(2);
+      label = 'utf-16be';
+    } else {
+      label = 'utf-16le';
+    }
+  } else if (enc === 3) {
+    label = 'utf-8';
+  }
   try {
-    return new TextDecoder(label).decode(bytes.subarray(1)).replace(/\0+/g, '').replace(/^\uFEFF/, '').trim();
+    return new TextDecoder(label).decode(body).replace(/\u0000+/g, '').replace(/^\uFEFF/, '').trim();
   } catch {
     return '';
   }
@@ -319,7 +334,7 @@ async function readTags(file) {
     tags = {};
   }
   if (tags.no) {
-    const n = parseInt(tags.no, 10);
+    const n = parseInt(String(tags.no), 10);
     tags.no = Number.isNaN(n) ? '' : String(n);
   }
   return tags;
@@ -348,12 +363,16 @@ function parseVorbisComment(b, tags) {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   const fields = { TITLE: 'title', ARTIST: 'artist', ALBUM: 'album', TRACKNUMBER: 'no' };
   let p = 0;
-  p += 4 + dv.getUint32(p, true); // skip vendor string
+  if (b.length < 4) return;
+  const vendorLen = dv.getUint32(p, true);
+  p += 4 + vendorLen;
+  if (p + 4 > b.length) return;
   const count = dv.getUint32(p, true);
   p += 4;
   for (let i = 0; i < count && p + 4 <= b.length; i++) {
     const n = dv.getUint32(p, true);
     p += 4;
+    if (p + n > b.length) break;
     const text = new TextDecoder('utf-8').decode(b.subarray(p, p + n));
     p += n;
     const eq = text.indexOf('=');
@@ -364,7 +383,6 @@ function parseVorbisComment(b, tags) {
 }
 
 // ---- M4A / MP4: iTunes-style atoms under moov > udta > meta > ilst ----
-// Reads a list of child boxes (type, payload start, payload end) from a byte range
 function mp4Children(b, start, end) {
   const out = [];
   let p = start;
@@ -373,6 +391,7 @@ function mp4Children(b, start, end) {
     const type = String.fromCharCode(...b.subarray(p + 4, p + 8));
     let hdr = 8;
     if (size === 1) {
+      if (p + 16 > end) break;
       size = Number(new DataView(b.buffer, b.byteOffset + p + 8, 8).getBigUint64(0));
       hdr = 16;
     } else if (size === 0) {
@@ -387,7 +406,7 @@ function mp4Children(b, start, end) {
 
 async function readM4aTags(file) {
   const tags = {};
-  // Find the top-level moov box, which may sit before or after the audio data
+
   let off = 0;
   let moov = null;
   while (off + 8 <= file.size && !moov) {
@@ -396,7 +415,7 @@ async function readM4aTags(file) {
     const type = String.fromCharCode(...h.subarray(4, 8));
     let hdr = 8;
     if (size === 1) {
-      size = Number(new DataView(h.buffer, 8, 8).getBigUint64(0));
+      size = Number(new DataView(h.buffer, h.byteOffset + 8, 8).getBigUint64(0));
       hdr = 16;
     } else if (size === 0) {
       size = file.size - off;
@@ -408,28 +427,28 @@ async function readM4aTags(file) {
   if (!moov) return tags;
 
   const b = new Uint8Array(await file.slice(moov.s, Math.min(moov.e, moov.s + 10000000)).arrayBuffer());
-  const child = (s, e, type) => mp4Children(b, s, e).find(c => c.type === type);
   const all = mp4Children(b, 0, b.length);
-
   const udta = all.find(c => c.type === 'udta');
-  const meta = udta && child(udta.s, udta.e, 'meta');
+  if (!udta) return tags;
+
+  let meta = mp4Children(b, udta.s, udta.e).find(c => c.type === 'meta');
+  if (!meta && udta.s + 4 <= udta.e) {
+    meta = mp4Children(b, udta.s + 4, udta.e).find(c => c.type === 'meta');
+  }
   if (!meta) return tags;
-  // meta is normally a full box (4 bytes of version and flags); some files omit them
-  const metaStart = b.length >= meta.s + 8 && String.fromCharCode(...b.subarray(meta.s + 4, meta.s + 8)) === 'hdlr'
-    ? meta.s
-    : meta.s + 4;
-  const ilst = child(metaStart, meta.e, 'ilst');
+
+  let ilst = mp4Children(b, meta.s + 4, meta.e).find(c => c.type === 'ilst');
+  if (!ilst) ilst = mp4Children(b, meta.s, meta.e).find(c => c.type === 'ilst');
   if (!ilst) return tags;
 
   const names = { '\xA9nam': 'title', '\xA9ART': 'artist', '\xA9alb': 'album' };
   for (const item of mp4Children(b, ilst.s, ilst.e)) {
-    const data = child(item.s, item.e, 'data');
+    const data = mp4Children(b, item.s, item.e).find(c => c.type === 'data');
     if (!data) continue;
-    // A data box starts with 1 byte of type, 3 of flags and 4 of locale, then the value
     const value = b.subarray(data.s + 8, data.e);
-    if (item.type === 'trkn') {
-      // Track number: 2 reserved bytes, then a 16-bit big-endian number
-      if (value.length >= 4) tags.no = String((value[2] << 8) | value[3]);
+    if (item.type === 'trkn' && value.length >= 4) {
+      const idx = (value[2] << 8) | value[3];
+      if (idx) tags.no = String(idx);
     } else if (names[item.type]) {
       tags[names[item.type]] = new TextDecoder('utf-8').decode(value).replace(/\0+/g, '').trim();
     }
@@ -447,25 +466,33 @@ async function readId3(file) {
       const size = syncsafe(head.subarray(6, 10));
       let buf = new Uint8Array(await file.slice(10, Math.min(file.size, 10 + size, 4000000)).arrayBuffer());
       if (head[5] & 0x80) buf = unsynchronise(buf);
+
       let p = 0;
       if (head[5] & 0x40) { // extended header present
         p = major === 4 ? syncsafe(buf.subarray(0, 4)) : 4 + u32(buf.subarray(0, 4));
       }
+
       const idLen = major === 2 ? 3 : 4;
       const hdrLen = major === 2 ? 6 : 10;
       while (p + hdrLen <= buf.length) {
         const id = String.fromCharCode(...buf.subarray(p, p + idLen));
-        if (!/^[A-Z0-9]{3,4}$/.test(id)) break; // reached padding
+        if (!/^[A-Z0-9]{3,4}$/.test(id)) break;
+
         const fsize = major === 2
           ? (buf[p + 3] << 16) | (buf[p + 4] << 8) | buf[p + 5]
           : major === 4 ? syncsafe(buf.subarray(p + 4, p + 8)) : u32(buf.subarray(p + 4, p + 8));
+
         const start = p + hdrLen;
+        if (start + fsize > buf.length) break;
+
         const field = TAG_FRAMES[id];
-        if (field && fsize > 0 && !tags[field]) tags[field] = decodeText(buf.subarray(start, start + fsize));
+        if (field && fsize > 0 && !tags[field]) {
+          tags[field] = decodeText(buf.subarray(start, start + fsize));
+        }
         p = start + fsize;
       }
     }
-    // ID3v1 fallback: fixed 128-byte block at the end of the file
+
     if (!tags.title && file.size >= 128) {
       const t = new Uint8Array(await file.slice(file.size - 128).arrayBuffer());
       if (t[0] === 0x54 && t[1] === 0x41 && t[2] === 0x47) { // "TAG"
@@ -479,9 +506,9 @@ async function readId3(file) {
   } catch {
     // unreadable tags fall back to the file name below
   }
-  // "3/12" -> "3"
+
   if (tags.no) {
-    const n = parseInt(tags.no, 10);
+    const n = parseInt(String(tags.no), 10);
     tags.no = Number.isNaN(n) ? '' : String(n);
   }
   return tags;
@@ -613,7 +640,7 @@ $('fFolder').onchange = async e => {
 
 // ---- Find missing: flag tracks whose file isn't inside the chosen folder ----
 function normKey(p) {
-  return p.replace(/\\/g, '/').replace(/^\.?\/+/, '').toLowerCase();
+  return p.replace(/\\/g, '/').replace(/^\.?\/?+/, '').toLowerCase();
 }
 
 $('btnCheck').onclick = () => {
