@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playlist Editor</title>
+<style>
+  /* Palette: graphite desk, paper-white type, one amber signal colour (a VU lamp) */
+  :root {
+    --bg: #131315;
+    --surface: #1b1c20;
+    --rule: #2a2b31;
+    --ink: #ece6da;
+    --muted: #8c8a84;
+    --signal: #e8a33d;
+    --signal-ink: #1a1206;
+    --danger: #d9644f;
+    --display: "Bahnschrift", "DIN Alternate", "Arial Narrow", "Franklin Gothic Medium", system-ui, sans-serif;
+    --text: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+  .wrap { max-width: 880px; margin: 0 auto; padding: 40px 24px 80px; }
+
+  /* Title block: the playlist name is the headline */
+  .masthead { border-bottom: 1px solid var(--rule); padding-bottom: 20px; margin-bottom: 20px; }
+  #name {
+    display: block;
+    width: 100%;
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    color: var(--ink);
+    font: 600 clamp(36px, 6vw, 60px)/1.05 var(--display);
+    font-stretch: 85%;
+    letter-spacing: -0.01em;
+    padding: 0 0 4px;
+    margin: 0;
+  }
+  #name:focus { outline: none; border-bottom-color: var(--signal); }
+  .meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
+  #status { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* Toolbar: quiet text buttons, one filled action */
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button, select {
+    font: inherit;
+    color: var(--ink);
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    padding: 7px 14px;
+    cursor: pointer;
+    transition: border-color .15s, color .15s, background .15s;
+  }
+  button:hover, select:hover { border-color: var(--muted); }
+  button.quiet:hover { color: var(--danger); border-color: var(--danger); }
+  button.export { background: var(--signal); border-color: var(--signal); color: var(--signal-ink); font-weight: 600; }
+  button.export:hover { filter: brightness(1.08); }
+  select { appearance: none; padding-right: 30px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 15px) 55%, calc(100% - 10px) 55%; background-size: 5px 5px; background-repeat: no-repeat; }
+  select option { background: var(--surface); }
+
+  /* Drop area: a full panel when empty, a slim strip once there are tracks */
+  #dropzone {
+    border: 1px dashed var(--rule);
+    border-radius: 14px;
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--muted);
+    margin: 24px 0;
+    transition: border-color .15s, background .15s, color .15s;
+  }
+  #dropzone strong { display: block; color: var(--ink); font: 600 22px/1.2 var(--display); font-stretch: 90%; margin-bottom: 6px; }
+  #dropzone.strip { padding: 14px; font-size: 14px; margin: 20px 0 0; }
+  #dropzone.strip strong { display: inline; font-size: inherit; margin: 0; }
+  #dropzone.over { border-color: var(--signal); color: var(--ink); background: rgba(232,163,61,.06); }
+
+  /* Tracklist: hairline rows */
+  ol { list-style: none; margin: 0; padding: 0; }
+  li.row {
+    display: grid;
+    grid-template-columns: 18px 36px 1fr auto;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 6px;
+    border-bottom: 1px solid var(--rule);
+    position: relative;
+  }
+  li.row:hover { background: rgba(255,255,255,.015); }
+  li.row.dragging { opacity: .35; }
+  /* Insertion marker: drawn between rows, for both reorders and dropped files */
+  li.row.drop-before::before, li.row.drop-after::after {
+    content: ""; position: absolute; left: 0; right: 0; height: 2px; background: var(--signal); z-index: 1;
+  }
+  li.row.drop-before::before { top: -1px; }
+  li.row.drop-after::after { bottom: -1px; }
+  .handle { color: var(--muted); cursor: grab; user-select: none; font-size: 16px; line-height: 1; text-align: center; }
+  .handle:active { cursor: grabbing; }
+  .num { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; font-size: 13px; }
+  .info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .line1 { display: flex; align-items: baseline; min-width: 0; }
+  .trackno { color: var(--muted); font-variant-numeric: tabular-nums; white-space: pre; font-size: 16px; }
+  .title {
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid transparent;
+    color: var(--ink);
+    font: 500 16px/1.3 var(--text);
+    padding: 2px 0;
+    width: 100%;
+    min-width: 0;
+  }
+  .title:hover { border-bottom-color: var(--rule); }
+  .title:focus { outline: none; border-bottom-color: var(--signal); }
+  .sub { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .actions { display: flex; gap: 2px; opacity: .45; transition: opacity .15s; }
+  li.row:hover .actions, li.row:focus-within .actions { opacity: 1; }
+  .actions button {
+    border: 0; border-radius: 6px; padding: 4px 8px; font-size: 14px; color: var(--muted);
+  }
+  .actions button:hover { color: var(--ink); background: var(--rule); }
+  .actions button.del:hover { color: var(--danger); background: transparent; }
+  li.empty { display: block; padding: 0; border: 0; color: var(--muted); }
+  li.row.missing { background: rgba(217,100,79,.08); box-shadow: inset 3px 0 0 var(--danger); }
+  li.row.missing .sub { color: var(--danger); }
+  li.row.missing .title { color: var(--danger) !important; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; }
+  }
+  @media (max-width: 560px) {
+    li.row { grid-template-columns: 14px 26px 1fr auto; gap: 10px; }
+    .actions { opacity: 1; }
+  }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <input id="name" type="text" value="Untitled playlist" aria-label="Playlist name" spellcheck="false">
+    <div class="meta">
+      <div id="status" aria-live="polite"></div>
+      <div class="toolbar">
+        <button id="btnLoad">Open .m3u</button>
+        <button id="btnAdd">Add folder</button>
+        <button id="btnFiles">Add files</button>
+        <button id="btnNew" class="quiet">Clear</button>
+        <button id="btnCheck" title="Pick the folder the playlist lives in. Tracks not found inside it are flagged red.">Find missing</button>
+        <select id="sep" aria-label="Path separator">
+          <option value="\">Backslashes</option>
+          <option value="/">Forward slashes</option>
+        </select>
+        <button id="btnSaveAs" class="export">Save as</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="dropzone"><strong>Drop here</strong>An .m3u to edit it, or music files and album folders to start a new playlist.</div>
+
+  <ol id="list" aria-label="Tracks"></ol>
+
+</div>
+
+<input type="file" id="fLoad" accept=".m3u,.m3u8,text/plain">
+<input type="file" id="fAdd" multiple accept="audio/*">
+<input type="file" id="fFolder" webkitdirectory directory multiple>
+<input type="file" id="fCheck" webkitdirectory directory multiple>
+
+<script>
+const AUDIO = /\.(mp3|flac|m4a|aac|ogg|opus|wav|wma|aiff?|alac)$/i;
+let tracks = []; // { path, title, no, artist, album, dur }
+
+const $ = id => document.getElementById(id);
+const list = $('list');
+const dropzone = $('dropzone');
+
+let dragFrom = null;   // index of the row being reordered, or null
+let enterCount = 0;    // counts file drags entering the page, so the highlight clears correctly
+
+function basename(p) { return p.split(/[\\/]/).pop().replace(AUDIO, ''); }
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+
+function render() {
+  list.innerHTML = '';
+  dropzone.classList.toggle('strip', tracks.length > 0);
+  dropzone.innerHTML = tracks.length
+    ? '<strong>Drop here</strong> to add files at that point, or an .m3u to replace this list.'
+    : '<strong>Drop here</strong>An .m3u to edit it, or music files and album folders to start a new playlist.';
+
+  if (!tracks.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = 'Nothing here yet.';
+    list.appendChild(li);
+  }
+  tracks.forEach((t, i) => {
+    const li = document.createElement('li');
+    li.className = t.missing ? 'row missing' : 'row';
+    li.draggable = true;
+    li.dataset.index = i;
+    li.innerHTML = `
+      <span class="handle" title="Drag to reorder" aria-hidden="true">&#8942;&#8942;</span>
+      <span class="num">${i + 1}</span>
+      <div class="info">
+        <div class="line1">
+          <span class="trackno">${t.no ? String(t.no).padStart(2, '0') + ' - ' : ''}</span>
+          <input class="title" type="text" value="${escHtml(t.title)}" aria-label="Track ${i + 1} title">
+        </div>
+        <span class="sub" title="${escHtml(t.path)}">${t.missing ? 'Not found in folder: ' + escHtml(t.path) : escHtml([t.artist, t.album].filter(Boolean).join(' - ') || t.path)}</span>
+      </div>
+      <div class="actions">
+        <button data-act="up" title="Move up" aria-label="Move up">&#8593;</button>
+        <button data-act="down" title="Move down" aria-label="Move down">&#8595;</button>
+        <button data-act="del" class="del" title="Remove" aria-label="Remove">&#215;</button>
+      </div>`;
+    list.appendChild(li);
+  });
+  const missingCount = tracks.filter(t => t.missing).length;
+  $('status').textContent = tracks.length
+    ? `${tracks.length} track${tracks.length === 1 ? '' : 's'}${missingCount ? `, ${missingCount} missing from folder` : ''}`
+    : '';
+}
+
+// ---- Insertion point: which gap between rows the pointer is over ----
+function slotAt(clientY) {
+  const rows = [...list.querySelectorAll('li.row')];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i].getBoundingClientRect();
+    if (clientY < r.top + r.height / 2) return i;
+  }
+  return tracks.length;
+}
+function showSlot(slot) {
+  clearSlot();
+  const rows = list.querySelectorAll('li.row');
+  if (!rows.length) return;
+  if (slot < rows.length) rows[slot].classList.add('drop-before');
+  else rows[rows.length - 1].classList.add('drop-after');
+}
+function clearSlot() {
+  list.querySelectorAll('li.row').forEach(l => l.classList.remove('drop-before', 'drop-after'));
+}
+
+// ---- Parsing playlists ----
+function parseM3U(text) {
+  const out = [];
+  let pending = null;
+  for (let line of text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    line = line.trim();
+    if (!line) continue;
+    if (line.startsWith('#EXTINF:')) {
+      const m = line.match(/^#EXTINF:(-?\d+(?:\.\d+)?)\s*,\s*(.*)$/);
+      pending = m ? { dur: m[1], title: m[2] } : null;
+    } else if (line.startsWith('#')) {
+      continue;
+    } else {
+      out.push({
+        path: line,
+        title: (pending?.title || basename(line)).replace(AUDIO, ''),
+        no: '', artist: '', album: '',
+        dur: pending?.dur || '0'
+      });
+      pending = null;
+    }
+  }
+  return out;
+}
+
+// ---- ID3 tag reading (reads only the bytes it needs, not the whole file) ----
+const TAG_FRAMES = { TIT2: 'title', TT2: 'title', TPE1: 'artist', TP1: 'artist', TALB: 'album', TAL: 'album', TRCK: 'no', TRK: 'no' };
+const syncsafe = b => ((b[0] & 0x7f) << 21) | ((b[1] & 0x7f) << 14) | ((b[2] & 0x7f) << 7) | (b[3] & 0x7f);
+const u32 = b => ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
+
+function decodeText(bytes) {
+  if (!bytes.length) return '';
+  const labels = { 0: 'iso-8859-1', 1: 'utf-16', 2: 'utf-16be', 3: 'utf-8' };
+  const label = labels[bytes[0]] || 'iso-8859-1';
+  try {
+    return new TextDecoder(label).decode(bytes.subarray(1)).replace(/\0+/g, '').replace(/^\uFEFF/, '').trim();
+  } catch {
+    return '';
+  }
+}
+
+// Undo ID3 unsynchronisation (0xFF 0x00 -> 0xFF), which some taggers apply to the whole tag
+function unsynchronise(b) {
+  const out = [];
+  for (let i = 0; i < b.length; i++) {
+    out.push(b[i]);
+    if (b[i] === 0xff && b[i + 1] === 0x00) i++;
+  }
+  return new Uint8Array(out);
+}
+
+// Pick a reader from the file's signature: FLAC, MP4/M4A, or ID3 (MP3 and most others)
+async function readTags(file) {
+  let tags = {};
+  try {
+    const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+    const sig = String.fromCharCode(...head.subarray(0, 4));
+    if (sig === 'fLaC') tags = await readFlacTags(file);
+    else if (String.fromCharCode(...head.subarray(4, 8)) === 'ftyp') tags = await readM4aTags(file);
+    else tags = await readId3(file);
+  } catch {
+    tags = {};
+  }
+  if (tags.no) {
+    const n = parseInt(tags.no, 10);
+    tags.no = Number.isNaN(n) ? '' : String(n);
+  }
+  return tags;
+}
+
+// ---- FLAC: Vorbis comments inside the METADATA_BLOCK_VORBIS_COMMENT block (type 4) ----
+async function readFlacTags(file) {
+  const tags = {};
+  let off = 4; // skip "fLaC"
+  while (off + 4 <= file.size) {
+    const h = new Uint8Array(await file.slice(off, off + 4).arrayBuffer());
+    const last = h[0] & 0x80;
+    const type = h[0] & 0x7f;
+    const len = (h[1] << 16) | (h[2] << 8) | h[3];
+    if (type === 4) {
+      parseVorbisComment(new Uint8Array(await file.slice(off + 4, off + 4 + len).arrayBuffer()), tags);
+    }
+    if (last) break;
+    off += 4 + len;
+  }
+  return tags;
+}
+
+// Vorbis comments are little-endian lengths followed by UTF-8 "FIELD=value" strings
+function parseVorbisComment(b, tags) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const fields = { TITLE: 'title', ARTIST: 'artist', ALBUM: 'album', TRACKNUMBER: 'no' };
+  let p = 0;
+  p += 4 + dv.getUint32(p, true); // skip vendor string
+  const count = dv.getUint32(p, true);
+  p += 4;
+  for (let i = 0; i < count && p + 4 <= b.length; i++) {
+    const n = dv.getUint32(p, true);
+    p += 4;
+    const text = new TextDecoder('utf-8').decode(b.subarray(p, p + n));
+    p += n;
+    const eq = text.indexOf('=');
+    if (eq < 0) continue;
+    const field = fields[text.slice(0, eq).toUpperCase()];
+    if (field && !tags[field]) tags[field] = text.slice(eq + 1).trim();
+  }
+}
+
+// ---- M4A / MP4: iTunes-style atoms under moov > udta > meta > ilst ----
+// Reads a list of child boxes (type, payload start, payload end) from a byte range
+function mp4Children(b, start, end) {
+  const out = [];
+  let p = start;
+  while (p + 8 <= end) {
+    let size = u32(b.subarray(p, p + 4));
+    const type = String.fromCharCode(...b.subarray(p + 4, p + 8));
+    let hdr = 8;
+    if (size === 1) {
+      size = Number(new DataView(b.buffer, b.byteOffset + p + 8, 8).getBigUint64(0));
+      hdr = 16;
+    } else if (size === 0) {
+      size = end - p;
+    }
+    if (size < hdr) break;
+    out.push({ type, s: p + hdr, e: Math.min(p + size, end) });
+    p += size;
+  }
+  return out;
+}
+
+async function readM4aTags(file) {
+  const tags = {};
+  // Find the top-level moov box, which may sit before or after the audio data
+  let off = 0;
+  let moov = null;
+  while (off + 8 <= file.size && !moov) {
+    const h = new Uint8Array(await file.slice(off, off + 16).arrayBuffer());
+    let size = u32(h.subarray(0, 4));
+    const type = String.fromCharCode(...h.subarray(4, 8));
+    let hdr = 8;
+    if (size === 1) {
+      size = Number(new DataView(h.buffer, 8, 8).getBigUint64(0));
+      hdr = 16;
+    } else if (size === 0) {
+      size = file.size - off;
+    }
+    if (size < hdr) break;
+    if (type === 'moov') moov = { s: off + hdr, e: off + size };
+    off += size;
+  }
+  if (!moov) return tags;
+
+  const b = new Uint8Array(await file.slice(moov.s, Math.min(moov.e, moov.s + 10000000)).arrayBuffer());
+  const child = (s, e, type) => mp4Children(b, s, e).find(c => c.type === type);
+  const all = mp4Children(b, 0, b.length);
+
+  const udta = all.find(c => c.type === 'udta');
+  const meta = udta && child(udta.s, udta.e, 'meta');
+  if (!meta) return tags;
+  // meta is normally a full box (4 bytes of version and flags); some files omit them
+  const metaStart = b.length >= meta.s + 8 && String.fromCharCode(...b.subarray(meta.s + 4, meta.s + 8)) === 'hdlr'
+    ? meta.s
+    : meta.s + 4;
+  const ilst = child(metaStart, meta.e, 'ilst');
+  if (!ilst) return tags;
+
+  const names = { '\xA9nam': 'title', '\xA9ART': 'artist', '\xA9alb': 'album' };
+  for (const item of mp4Children(b, ilst.s, ilst.e)) {
+    const data = child(item.s, item.e, 'data');
+    if (!data) continue;
+    // A data box starts with 1 byte of type, 3 of flags and 4 of locale, then the value
+    const value = b.subarray(data.s + 8, data.e);
+    if (item.type === 'trkn') {
+      // Track number: 2 reserved bytes, then a 16-bit big-endian number
+      if (value.length >= 4) tags.no = String((value[2] << 8) | value[3]);
+    } else if (names[item.type]) {
+      tags[names[item.type]] = new TextDecoder('utf-8').decode(value).replace(/\0+/g, '').trim();
+    }
+  }
+  return tags;
+}
+
+// ---- ID3 (MP3 and others): the original reader ----
+async function readId3(file) {
+  const tags = {};
+  try {
+    const head = new Uint8Array(await file.slice(0, 10).arrayBuffer());
+    if (head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) { // "ID3" (ID3v2)
+      const major = head[3];
+      const size = syncsafe(head.subarray(6, 10));
+      let buf = new Uint8Array(await file.slice(10, Math.min(file.size, 10 + size, 4000000)).arrayBuffer());
+      if (head[5] & 0x80) buf = unsynchronise(buf);
+      let p = 0;
+      if (head[5] & 0x40) { // extended header present
+        p = major === 4 ? syncsafe(buf.subarray(0, 4)) : 4 + u32(buf.subarray(0, 4));
+      }
+      const idLen = major === 2 ? 3 : 4;
+      const hdrLen = major === 2 ? 6 : 10;
+      while (p + hdrLen <= buf.length) {
+        const id = String.fromCharCode(...buf.subarray(p, p + idLen));
+        if (!/^[A-Z0-9]{3,4}$/.test(id)) break; // reached padding
+        const fsize = major === 2
+          ? (buf[p + 3] << 16) | (buf[p + 4] << 8) | buf[p + 5]
+          : major === 4 ? syncsafe(buf.subarray(p + 4, p + 8)) : u32(buf.subarray(p + 4, p + 8));
+        const start = p + hdrLen;
+        const field = TAG_FRAMES[id];
+        if (field && fsize > 0 && !tags[field]) tags[field] = decodeText(buf.subarray(start, start + fsize));
+        p = start + fsize;
+      }
+    }
+    // ID3v1 fallback: fixed 128-byte block at the end of the file
+    if (!tags.title && file.size >= 128) {
+      const t = new Uint8Array(await file.slice(file.size - 128).arrayBuffer());
+      if (t[0] === 0x54 && t[1] === 0x41 && t[2] === 0x47) { // "TAG"
+        const str = (a, b) => new TextDecoder('windows-1252').decode(t.subarray(a, b)).replace(/\0+/g, '').trim();
+        tags.title = str(3, 33);
+        tags.artist = str(33, 63);
+        tags.album = str(63, 93);
+        if (t[125] === 0 && t[126]) tags.no = String(t[126]);
+      }
+    }
+  } catch {
+    // unreadable tags fall back to the file name below
+  }
+  // "3/12" -> "3"
+  if (tags.no) {
+    const n = parseInt(tags.no, 10);
+    tags.no = Number.isNaN(n) ? '' : String(n);
+  }
+  return tags;
+}
+
+// Turn files into track entries, keeping their paths relative to the folder they came from
+async function fromFiles(items) {
+  const audio = items.filter(({ file }) => AUDIO.test(file.name));
+  const added = await Promise.all(audio.map(async ({ file, rel }) => {
+    const tags = await readTags(file);
+    return {
+      path: rel,
+      title: tags.title || basename(file.name),
+      no: tags.no || '',
+      artist: tags.artist || '',
+      album: tags.album || '',
+      dur: '0'
+    };
+  }));
+  // Keep a batch in track order (track number first, then path)
+  added.sort((a, b) => (+a.no || 1e9) - (+b.no || 1e9) || a.path.localeCompare(b.path, undefined, { numeric: true }));
+  return added;
+}
+
+// Insert new tracks at a position (slot), or at the end when slot is null
+function insertTracks(added, slot = null) {
+  const at = slot ?? tracks.length;
+  tracks.splice(at, 0, ...added);
+  render();
+}
+
+// Folder drops in Chrome and Edge: walk the dropped folder, keeping relative paths
+async function readEntry(entry, out) {
+  if (entry.isFile) {
+    const file = await new Promise((res, rej) => entry.file(res, rej));
+    out.push({ file, rel: entry.fullPath.replace(/^\//, '') });
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader();
+    let batch;
+    do {
+      batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+      for (const e of batch) await readEntry(e, out);
+    } while (batch.length);
+  }
+}
+
+// Files dropped from the desktop. Reads the drag data synchronously, before any await.
+async function handleFileDrop(dt, slot) {
+  const files = [...dt.files];
+  const playlist = files.find(f => /\.m3u8?$/i.test(f.name));
+  if (playlist) {
+    tracks = parseM3U(await playlist.text());
+    $('name').value = playlist.name.replace(/\.m3u8?$/i, '');
+    render();
+    return;
+  }
+  const entries = [...dt.items]
+    .map(i => (typeof i.webkitGetAsEntry === 'function' ? i.webkitGetAsEntry() : null))
+    .filter(Boolean);
+  const collected = [];
+  if (entries.length) {
+    for (const e of entries) await readEntry(e, collected); // Chrome and Edge can read folders
+  } else {
+    for (const f of files) collected.push({ file: f, rel: f.name }); // Firefox: files only
+  }
+  insertTracks(await fromFiles(collected), slot);
+}
+
+// ---- Page-level drag and drop ----
+// Files: highlight the drop panel, show where the files will land, and accept the drop.
+document.addEventListener('dragenter', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  enterCount++;
+  dropzone.classList.add('over');
+});
+document.addEventListener('dragover', e => {
+  e.preventDefault(); // also stops Firefox opening dropped text as a link
+  if (hasFiles(e)) {
+    e.dataTransfer.dropEffect = 'copy';
+    dropzone.classList.add('over');
+    if (list.contains(e.target)) showSlot(slotAt(e.clientY));
+    else clearSlot();
+  }
+});
+document.addEventListener('dragleave', e => {
+  if (!hasFiles(e)) return;
+  enterCount = Math.max(0, enterCount - 1);
+  if (enterCount === 0) {
+    dropzone.classList.remove('over');
+    clearSlot();
+  }
+});
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  if (!hasFiles(e)) return; // reorder drops are handled on the list
+  enterCount = 0;
+  dropzone.classList.remove('over');
+  const slot = list.contains(e.target) ? slotAt(e.clientY) : null;
+  clearSlot();
+  handleFileDrop(e.dataTransfer, slot);
+});
+
+// ---- Toolbar ----
+$('btnLoad').onclick = () => $('fLoad').click();
+$('btnAdd').onclick = () => $('fFolder').click();
+$('btnFiles').onclick = () => $('fAdd').click();
+$('btnNew').onclick = () => {
+  if (!tracks.length || confirm('Clear all tracks?')) { tracks = []; render(); }
+};
+
+$('fLoad').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  tracks = parseM3U(await f.text());
+  $('name').value = f.name.replace(/\.m3u8?$/i, '');
+  render(); e.target.value = '';
+};
+$('fAdd').onchange = async e => {
+  const picked = [...e.target.files].map(f => ({ file: f, rel: f.name }));
+  e.target.value = '';
+  insertTracks(await fromFiles(picked));
+};
+$('fFolder').onchange = async e => {
+  // webkitRelativePath includes the chosen folder name, e.g. "Album/01.mp3"
+  const picked = [...e.target.files].map(f => ({ file: f, rel: f.webkitRelativePath || f.name }));
+  e.target.value = '';
+  insertTracks(await fromFiles(picked));
+};
+
+// ---- Find missing: flag tracks whose file isn't inside the chosen folder ----
+function normKey(p) {
+  return p.replace(/\\/g, '/').replace(/^\.?\/+/, '').toLowerCase();
+}
+
+$('btnCheck').onclick = () => {
+  if (!tracks.length) return alert('No tracks to check.');
+  $('fCheck').click();
+};
+
+$('fCheck').onchange = async e => {
+  const found = new Map(); // normalised path inside the chosen folder -> File
+  for (const f of e.target.files) {
+    if (!AUDIO.test(f.name)) continue;
+    found.set(normKey(f.webkitRelativePath || f.name), f);
+  }
+  // A playlist path matches a file if it equals the file's path or ends at a folder
+  // boundary inside it, so picking the playlist's folder or a folder above it both work
+  const lookup = k => {
+    if (found.has(k)) return found.get(k);
+    for (const [fk, f] of found) if (fk.endsWith('/' + k)) return f;
+    return null;
+  };
+  e.target.value = ''; // File objects stay readable after the input is cleared
+  $('status').textContent = 'Checking...';
+  for (const t of tracks) {
+    const f = lookup(normKey(t.path));
+    t.missing = !f;
+    if (!f) continue;
+    // Tags come from the audio file itself, replacing whatever the playlist stored
+    const tags = await readTags(f);
+    if (tags.title) t.title = tags.title;
+    t.no = tags.no || '';
+    t.artist = tags.artist || '';
+    t.album = tags.album || '';
+  }
+  render();
+  if (!tracks.some(t => t.missing)) $('status').textContent = `All ${tracks.length} tracks found in this folder.`;
+};
+
+// ---- Row buttons and title editing ----
+list.addEventListener('click', e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  const i = +btn.closest('li').dataset.index;
+  const act = btn.dataset.act;
+  if (act === 'del') tracks.splice(i, 1);
+  if (act === 'up' && i > 0) [tracks[i - 1], tracks[i]] = [tracks[i], tracks[i - 1]];
+  if (act === 'down' && i < tracks.length - 1) [tracks[i + 1], tracks[i]] = [tracks[i], tracks[i + 1]];
+  render();
+});
+list.addEventListener('input', e => {
+  if (!e.target.classList.contains('title')) return;
+  tracks[+e.target.closest('li').dataset.index].title = e.target.value;
+});
+
+// ---- Reordering rows by dragging ----
+list.addEventListener('dragstart', e => {
+  const li = e.target.closest('li.row'); if (!li) return;
+  dragFrom = +li.dataset.index;
+  li.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', 'reorder'); // Firefox needs data to start a drag
+});
+list.addEventListener('dragend', () => {
+  dragFrom = null;
+  clearSlot();
+  list.querySelectorAll('.dragging').forEach(l => l.classList.remove('dragging'));
+});
+list.addEventListener('dragover', e => {
+  if (dragFrom === null) return; // file drags are handled at page level
+  e.preventDefault();
+  e.stopPropagation();
+  e.dataTransfer.dropEffect = 'move';
+  showSlot(slotAt(e.clientY));
+});
+list.addEventListener('drop', e => {
+  if (dragFrom === null) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const to = slotAt(e.clientY);
+  const [item] = tracks.splice(dragFrom, 1);
+  tracks.splice(dragFrom < to ? to - 1 : to, 0, item);
+  dragFrom = null;
+  clearSlot();
+  render();
+});
+
+// ---- Save as: M3U with paths relative to the playlist's folder ----
+// Label used in #EXTINF, e.g. "Deftones - 1995 Adrenaline - 01 Bored"
+function exportTitle(t) {
+  const song = t.no ? String(t.no).padStart(2, '0') + ' ' + t.title : t.title;
+  return [t.artist, t.album, song].filter(Boolean).join(' - ');
+}
+
+function buildM3U() {
+  const sep = $('sep').value;
+  let out = '#EXTM3U\n';
+  for (const t of tracks) {
+    out += `#EXTINF:${t.dur || 0},${exportTitle(t)}\n`;
+    out += t.path.replace(/[\\/]/g, sep) + '\n';
+  }
+  return out;
+}
+
+$('btnSaveAs').onclick = async () => {
+  if (!tracks.length) return alert('Nothing to save yet.');
+  const suggested = ($('name').value.trim() || 'playlist') + '.m3u';
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await showSaveFilePicker({
+        suggestedName: suggested,
+        types: [{ description: 'M3U playlist', accept: { 'audio/x-mpegurl': ['.m3u'] } }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(buildM3U());
+      await writable.close();
+      $('status').textContent = `Saved as ${handle.name}`;
+    } catch (err) {
+      if (err.name !== 'AbortError') alert('Could not save the file: ' + err.message);
+    }
+    return;
+  }
+  // Browsers without the file picker download the file instead
+  const blob = new Blob([buildM3U()], { type: 'audio/x-mpegurl' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = suggested;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+
+render();
+</script>
+</body>
+</html>
